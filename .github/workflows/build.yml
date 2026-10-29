@@ -1,0 +1,104 @@
+name: Build APK
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Generate project
+        run: |
+          P=proj/app/src/main
+          mkdir -p $P/java/com/dienz/taptosleep $P/res/mipmap-anydpi-v26 $P/res/mipmap-xxxhdpi
+          cat > proj/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "TapToSleep"
+          include ':app'
+          EOF
+          cat > proj/build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+          cat > proj/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.dienz.taptosleep'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.dienz.taptosleep2'
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+          cat > $P/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application android:label="Tap to Sleep" android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:excludeFromRecents="true"
+                      android:theme="@android:style/Theme.Translucent.NoTitleBar">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > $P/java/com/dienz/taptosleep/MainActivity.java <<'EOF'
+          package com.dienz.taptosleep;
+          import android.app.Activity;
+          import android.os.Bundle;
+          public class MainActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  new Thread(() -> {
+                      try {
+                          Runtime.getRuntime().exec(new String[]{"su", "-c", "input keyevent 223"}).waitFor();
+                      } catch (Exception e) { e.printStackTrace(); }
+                      runOnUiThread(this::finishAndRemoveTask);
+                  }).start();
+              }
+          }
+          EOF
+          cat > $P/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@android:color/black"/>
+              <foreground android:drawable="@mipmap/ic_fg"/>
+          </adaptive-icon>
+          EOF
+      - name: Make icons
+        run: |
+          pip install pillow
+          python3 - "$(ls *.png | head -n1)" <<'EOF'
+          import sys
+          from PIL import Image
+          im = Image.open(sys.argv[1]).convert('RGBA')
+          im = im.crop(im.getbbox())
+          d = 'proj/app/src/main/res/mipmap-xxxhdpi/'
+          im.resize((192, 192), Image.LANCZOS).save(d + 'ic_launcher.png')
+          S = 432
+          art = int(S * 0.70)
+          a = im.resize((art, art), Image.LANCZOS)
+          fg = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+          fg.paste(a, ((S - art) // 2, (S - art) // 2), a)
+          fg.save(d + 'ic_fg.png')
+          EOF
+      - run: gradle assembleDebug
+        working-directory: proj
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TapToSleep
+          path: proj/app/build/outputs/apk/debug/app-debug.apk
